@@ -1,3 +1,67 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
 venv/
 .env/
-slack_message.json/
+.venv/
+
+# Environment variables
+.env
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# PyInstaller
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.cache
+.pytest_cache/
+coverage.xml
+*.cover
+*.py,cover
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# MyPy / Pylint / Pyright
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pyright/
+
+# VSCode / PyCharm
+.vscode/
+.idea/
+
+# macOS / Windows / Linux
+.DS_Store
+Thumbs.db
+ehthumbs.db
+*.swp
+*~
+
+# Logs and local data
+*.log
+*.sqlite3
+
+# Ignore local notebooks or experiment outputs
+outputs/
+
+
+secrets/
+
+.env 
+
+
+slack_classification_results_*.json
