@@ -12,7 +12,7 @@ load_dotenv()
 
 class SlackService:
     DEFAULT_CONFIG = {
-        'request_limit': 10,  # req/min
+        'request_limit': 10,
         'messages_per_call': 100,
         'max_retries': 3
     }
@@ -49,6 +49,7 @@ class SlackService:
         all_replies = []
         cursor = None
         request_delay = 60 / request_limit_per_minute
+        reply = ""
         while True:
             try:
                 response = self.client.conversations_replies(
@@ -57,17 +58,12 @@ class SlackService:
                     cursor=cursor,
                     limit=messages_per_call
                 )
-
                 messages = response.get('messages', [])
-                
-                # Exclude parent (first message) and bots
-                replies = [
-                    msg for msg in messages[1:]  # skip parent
-                    if not (exclude_bot_messages and msg.get('bot_id'))
-                ]
-                all_replies.extend(replies)
-
-                print(f"Thread {thread_ts}: fetched {len(replies)} replies. Total: {len(all_replies)}")
+                reply = ""
+                single_line = "\n-----------------------------\n"
+                for message in messages:
+                    if message['type'] == 'message':
+                        reply = reply + single_line + "[User: " + message['user'] + "]" + ":" + message['text']
 
                 cursor = response.get('response_metadata', {}).get('next_cursor')
                 if not cursor:
@@ -81,11 +77,11 @@ class SlackService:
                     print(f"Rate limited on thread fetch. Sleeping {retry_after}s...")
                     time.sleep(retry_after)
                 else:
+                    reply = "[Unable to fetch replies]"
                     print(f"[ERROR] Failed to fetch replies for {thread_ts}: {e.response['error']}")
                     break
-
-        return all_replies
-
+        
+        return reply
 
     def fetch_messages_within_range(
             self,
@@ -111,6 +107,13 @@ class SlackService:
             
         Returns:
             List of message dictionaries
+
+            dict:
+                - user: user
+                - thread_ts: ts
+                - reply_count: int
+                - latest_reply: int
+
         """
         all_messages = []
         cursor = None
@@ -135,11 +138,18 @@ class SlackService:
                 )
                 
                 messages = response.get('messages', [])
-                if not dry_run:
-                    all_messages.extend(
-                        msg for msg in messages 
-                        if not (exclude_bot_messages and msg.get('bot_id'))
-                    )
+
+                for message in messages:
+                    if message['type'] == "message":
+                        all_messages.append(
+                            {
+                                "user": message['user'],
+                                "thread_ts": message['ts'],
+                                "reply_count": message.get('reply_count', 0),
+                                "latest_reply": message.get('latest_reply', None),
+                                "channel_id": channel_id
+                            }
+                        )
 
                 print(f"Fetched {len(messages)} messages. Total: {len(all_messages)}")
 
@@ -148,7 +158,7 @@ class SlackService:
                     break
 
                 time.sleep(request_delay)
-                retry_count = 0  # Reset on success
+                retry_count = 0
 
             except SlackApiError as e:
                 retry_count += 1
@@ -164,24 +174,33 @@ class SlackService:
                     if retry_count >= self.DEFAULT_CONFIG['max_retries']:
                         break
 
-        if save_to_file and not dry_run:
-            with open(save_to_file, 'w') as f:
-                json.dump(all_messages, f, indent=2)
-
         return all_messages
 
-if __name__ == "__main__":
-    slack = SlackService()
-    messages = slack.fetch_messages_within_range(
-        channel_id="C096TJLR1GF",
-        days=30,
-        save_to_file="slack_message.json"
-    )
-    print(f"\nFetched {len(messages)} messages total.")
+    def post_reply_to_thread(
+            self,
+            channel_id: str,
+            thread_ts: str,
+            message_text: str
+    ):
+        """
+        Posts a reply in a Slack thread, tagging specified users.
 
-    for message in messages:
-        replies = slack.fetch_thread_replies(
-            channel_id="C096TJLR1GF",
-            thread_ts=message["ts"]
-        )
-        print(f"Reply: {replies}")
+        Args:
+            channel_id: Channel to post in
+            thread_ts: Parent thread timestamp
+            message_text: Message content (can include context)
+        
+        Returns:
+            Message ts of the reply, or None on failure
+        """
+        try:
+            response = self.client.chat_postMessage(
+                channel=channel_id,
+                text=message_text,
+                thread_ts=thread_ts
+            )
+            print(f"Posted reply to thread {thread_ts}")
+            return response['ts']
+        except SlackApiError as e:
+            print(f"[ERROR] Failed to post message: {e.response['error']}")
+            return None
