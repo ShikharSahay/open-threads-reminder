@@ -169,3 +169,19 @@ class SlackService:
                 json.dump(all_messages, f, indent=2)
 
         return all_messages
+
+if __name__ == "__main__":
+    slack = SlackService()
+    messages = slack.fetch_messages_within_range(
+        channel_id="C096TJLR1GF",
+        days=30,
+        save_to_file="slack_message.json"
+    )
+    print(f"\nFetched {len(messages)} messages total.")
+
+    for message in messages:
+        replies = slack.fetch_thread_replies(
+            channel_id="C096TJLR1GF",
+            thread_ts=message["ts"]
+        )
+        print(f"Reply: {replies}")
