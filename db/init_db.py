@@ -100,6 +100,38 @@ class DBClient:
             print(f"Error inserting data: {e}")
             raise
 
+    def get_open_threads_within_range(self, table: str, days: int):
+        query = """
+        SELECT * FROM %s
+        WHERE status = 'open'
+          AND created_at >= NOW() - INTERVAL %s;
+        """
+        self.cursor.execute(query, (table ,f'{days} days',))
+        return self.cursor.fetchall()
+
+    def update_thread_reply_count(self, thread_id, channel_id, reply_count, last_reply):
+        query = """
+            UPDATE threads 
+            SET reply_count = %s, last_reply_ts = %s 
+            WHERE threads_ts = %s AND channel_id = %s;
+        """
+        self.cursor.execute(query, (
+            reply_count, last_reply, thread_id, channel_id
+        ))
+        return True
+
+    def update_thread_as_closed(self, thread_id, channel_id):
+        query = """
+            UPDATE threads
+            SET status = 'closed'
+            WHERE thread_ts = %s AND channel_id = %s;
+        """
+        self.cursor.execute(
+            query, (
+                thread_id, channel_id
+            )
+        )
+
     def close(self):
         """Close the connection and cursor safely."""
         try:

@@ -1,27 +1,6 @@
 from db.init_db import DBClient
 from slack_services.init_slack import SlackService
-
-DB_CONFIG = {
-    "dbname": "postgres", 
-    "user": "postgres", 
-    "password": "", 
-    "host": "localhost",
-    "port": "5432"
-}
-channels = [
-    {
-        "channel_name":"vishal-testing-slack",
-        "channel_id":"C096TJLR1GF"
-    },
-    {
-        "channel_name": "proj_pg15_upgrade",
-        "channel_id": "C07DURKHHNH"
-    },
-    {
-        "channel_name": "proj_pg15",
-        "channel_id": "C03L0TLANHY"
-    }
-]
+from config import DB_CONFIG, channels
 
 db = DBClient(DB_CONFIG)
 
