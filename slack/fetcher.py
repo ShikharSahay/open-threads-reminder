@@ -1,5 +1,3 @@
-# slack/fetcher.py
-
 from slack.client import SlackClient
 from slack_sdk.errors import SlackApiError
 from datetime import datetime, timedelta
