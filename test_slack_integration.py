@@ -16,7 +16,7 @@ def test_slack_integration():
     
     try:
         # Import Slack service and VertexAI client
-        from slack.init_slack import SlackService
+        from slack_services.init_slack import SlackService
         from vertex.client import VertexAIClient
         
         print("✅ Successfully imported Slack and VertexAI services")
