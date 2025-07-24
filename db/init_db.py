@@ -1,9 +1,24 @@
 import psycopg2
 import psycopg2.extras
+from psycopg2 import sql
 from datetime import datetime
-from typing import Dict
+from typing import Dict, List, Optional
 
 class DBClient:
+    """
+    PostgreSQL database client for managing Slack thread data.
+    
+    This class provides a high-level interface for storing and retrieving
+    Slack thread information across different channels. Each channel gets
+    its own table for better data organization and performance.
+    
+    Features:
+    - Automatic database and table creation
+    - Safe SQL queries with injection protection
+    - Thread lifecycle management (open/closed status)
+    - Context manager support for automatic cleanup
+    """
+    
     def __init__(self, db_config: Dict):
         """
         Initialize the database client with connection settings.
@@ -23,19 +38,23 @@ class DBClient:
         self.conn.autocommit = True
         self.cursor = self.conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
-    def create_prerequisites(self, database: str, channels: list[Dict]):
+    def create_prerequisites(self, database: str, channels: List[Dict]):
         """
         Create the specified database and table if they don't already exist.
         
         Args:
             database: Name of the database to check/create
-            table: Name of the table to check/create
+            channels: List of channel dictionaries with 'channel_name' key
         """
         try:
             # Check if database exists
             self.cursor.execute("SELECT 1 FROM pg_database WHERE datname = %s", (database,))
             if not self.cursor.fetchone():
-                self.cursor.execute(f"CREATE DATABASE {database}")
+                # Note: Database names cannot be parameterized in psycopg2
+                # Ensure database name is safe before using it
+                if not database.replace('_', '').replace('-', '').isalnum():
+                    raise ValueError("Database name contains invalid characters")
+                self.cursor.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database)))
                 print(f"Database created: {database}")
 
             # Reconnect using the new database
@@ -44,22 +63,33 @@ class DBClient:
 
             # Create the table if not exists
             for channel in channels:
-                table = channel["channel_name"]
-                table = table.replace("-", "_")
-                self.cursor.execute(f"""
-                    CREATE TABLE IF NOT EXISTS {table} (
+                table_name = channel["channel_name"].replace("-", "_")
+                
+                # Validate table name
+                if not table_name.replace('_', '').isalnum():
+                    raise ValueError(f"Table name contains invalid characters: {table_name}")
+                
+                create_table_query = sql.SQL("""
+                    CREATE TABLE IF NOT EXISTS {} (
                         thread_ts TEXT NOT NULL,
                         channel_id TEXT NOT NULL,
                         user_id TEXT NOT NULL,
                         reply_count INTEGER DEFAULT 0,
                         latest_reply TIMESTAMP,
+                        status TEXT DEFAULT 'open',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         PRIMARY KEY(thread_ts, channel_id)
                     )
-                """)
-                print(f"Table created: {table}")
+                """).format(sql.Identifier(table_name))
+                
+                self.cursor.execute(create_table_query)
+                print(f"Table created: {table_name}")
 
         except psycopg2.Error as e:
             print(f"Error setting up database/table: {e}")
+            raise
+        except ValueError as e:
+            print(f"Invalid name: {e}")
             raise
 
     def store_thread_in_table(self, table: str, thread_data: Dict):
@@ -76,8 +106,8 @@ class DBClient:
         ts_float = float(ts_latest_reply)
         sql_timestamp = datetime.fromtimestamp(ts_float)
 
-        query = f"""
-            INSERT INTO {table} (thread_ts, channel_id, user_id, reply_count, latest_reply, status)
+        query = sql.SQL("""
+            INSERT INTO {} (thread_ts, channel_id, user_id, reply_count, latest_reply, status)
             VALUES (
                 %(thread_ts)s, %(channel_id)s, %(user_id)s,
                 %(reply_count)s, %(latest_reply)s, %(status)s
@@ -85,8 +115,9 @@ class DBClient:
             ON CONFLICT (thread_ts, channel_id)
             DO UPDATE SET
                 reply_count = EXCLUDED.reply_count,
-                latest_reply = EXCLUDED.latest_reply
-        """
+                latest_reply = EXCLUDED.latest_reply,
+                status = EXCLUDED.status
+        """).format(sql.Identifier(table))
 
         # Prepare the dict for SQL (replace Slack ts string with datetime object)
         thread_data_sql = {
@@ -100,48 +131,119 @@ class DBClient:
             print(f"Error inserting data: {e}")
             raise
 
-    def get_open_threads_within_range(self, table: str, days: int):
-        query = """
-        SELECT * FROM %s
-        WHERE status = 'open'
-          AND created_at >= NOW() - INTERVAL %s;
-        """
-        self.cursor.execute(query, (table ,f'{days} days',))
+    def get_open_threads_within_range(self, table: str, days: int) -> List[Dict]:
+        # Use psycopg2.sql for safe table name formatting
+        query = sql.SQL("""
+            SELECT * FROM {}
+            WHERE status = 'open'
+              AND created_at >= NOW() - INTERVAL %s
+        """).format(sql.Identifier(table))
+        
+        self.cursor.execute(query, (f'{days} days',))
         return self.cursor.fetchall()
 
-    def update_thread_reply_count(self, thread_id, channel_id, reply_count, last_reply):
-        query = """
-            UPDATE threads 
-            SET reply_count = %s, last_reply_ts = %s 
-            WHERE threads_ts = %s AND channel_id = %s;
-        """
-        self.cursor.execute(query, (
-            reply_count, last_reply, thread_id, channel_id
-        ))
-        return True
+    def get_thread_by_id(self, table: str, thread_ts: str, channel_id: str) -> Optional[Dict]:
+        """Get a specific thread by its timestamp and channel ID."""
+        query = sql.SQL("""
+            SELECT * FROM {}
+            WHERE thread_ts = %s AND channel_id = %s
+        """).format(sql.Identifier(table))
+        
+        try:
+            self.cursor.execute(query, (thread_ts, channel_id))
+            return self.cursor.fetchone()
+        except psycopg2.Error as e:
+            print(f"Error fetching thread: {e}")
+            raise
 
-    def update_thread_as_closed(self, thread_id, channel_id):
-        query = """
-            UPDATE threads
+    def get_threads_by_status(self, table: str, status: str) -> List[Dict]:
+        """Get all threads with a specific status."""
+        query = sql.SQL("""
+            SELECT * FROM {}
+            WHERE status = %s
+            ORDER BY created_at DESC
+        """).format(sql.Identifier(table))
+        
+        try:
+            self.cursor.execute(query, (status,))
+            return self.cursor.fetchall()
+        except psycopg2.Error as e:
+            print(f"Error fetching threads by status: {e}")
+            raise
+
+    def update_thread_reply_count(self, table: str, thread_id: str, channel_id: str, reply_count: int, last_reply) -> bool:
+        """Update reply count and latest reply timestamp for a thread."""
+        query = sql.SQL("""
+            UPDATE {} 
+            SET reply_count = %s, latest_reply = %s 
+            WHERE thread_ts = %s AND channel_id = %s
+        """).format(sql.Identifier(table))
+        
+        try:
+            self.cursor.execute(query, (
+                reply_count, last_reply, thread_id, channel_id
+            ))
+            return True
+        except psycopg2.Error as e:
+            print(f"Error updating thread reply count: {e}")
+            raise
+
+    def update_thread_as_closed(self, table: str, thread_id: str, channel_id: str) -> None:
+        """Mark a thread as closed."""
+        query = sql.SQL("""
+            UPDATE {}
             SET status = 'closed'
-            WHERE thread_ts = %s AND channel_id = %s;
-        """
-        self.cursor.execute(
-            query, (
-                thread_id, channel_id
-            )
-        )
+            WHERE thread_ts = %s AND channel_id = %s
+        """).format(sql.Identifier(table))
+        
+        try:
+            self.cursor.execute(query, (thread_id, channel_id))
+        except psycopg2.Error as e:
+            print(f"Error closing thread: {e}")
+            raise
 
-    def close(self):
+    def delete_thread(self, table: str, thread_ts: str, channel_id: str) -> bool:
+        """Delete a specific thread."""
+        query = sql.SQL("""
+            DELETE FROM {}
+            WHERE thread_ts = %s AND channel_id = %s
+        """).format(sql.Identifier(table))
+        
+        try:
+            self.cursor.execute(query, (thread_ts, channel_id))
+            return self.cursor.rowcount > 0
+        except psycopg2.Error as e:
+            print(f"Error deleting thread: {e}")
+            raise
+
+    def table_exists(self, table_name: str) -> bool:
+        """Check if a table exists in the current database."""
+        try:
+            self.cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables 
+                    WHERE table_name = %s
+                )
+            """, (table_name,))
+            return self.cursor.fetchone()['exists']
+        except psycopg2.Error as e:
+            print(f"Error checking table existence: {e}")
+            raise
+
+    def close(self) -> None:
         """Close the connection and cursor safely."""
         try:
-            if self.cursor:
+            if self.cursor and not self.cursor.closed:
                 self.cursor.close()
-            if self.conn:
+                self.cursor = None
+            if self.conn and not self.conn.closed:
                 self.conn.close()
+                self.conn = None
             print("Database connection closed.")
         except psycopg2.Error as e:
             print(f"Error closing connection: {e}")
+        except Exception as e:
+            print(f"Unexpected error closing connection: {e}")
 
     def __enter__(self):
         """Enable context manager support."""

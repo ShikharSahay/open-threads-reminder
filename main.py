@@ -1,11 +1,13 @@
-import random
 from slack_services.init_slack import SlackService
 from datetime import datetime, timedelta, timezone
 from db.init_db import DBClient
 from config import DB_CONFIG, channels, RESPONSE_LIMIT, THREAD_CYCLE
+from vertex.client import VertexAIClient
+import json
 
 db = DBClient(DB_CONFIG)
-slack = SlackService()
+slack_service = SlackService()
+vertex_ai = VertexAIClient()
 
 # Get last THREAD_CYCLE (90) days threads, which are open from database.
 for channel in channels:
@@ -19,7 +21,7 @@ for channel in channels:
     for stored_thread_info in threads:
         # Check if the len of conversations is matching
         # the len of conversation stored in database.
-        current_thread_info = slack.fetch_thread_info(
+        current_thread_info = slack_service.fetch_thread_info(
             stored_thread_info['thread_ts'],
             stored_thread_info['channel_id']
         )
@@ -32,20 +34,53 @@ for channel in channels:
                 last_reply_ts=current_thread_info['latest_reply']
             )
         elif current_thread_info['last_reply'] < (datetime.now() - timedelta(days=RESPONSE_LIMIT)):
-            # ======== KRISHNA NEEDS TO USE AI VERTEX HERE ======
+            # ======== KRISHNA'S VERTEX AI IMPLEMENTATION ======
             
-            # Demo response.
-            ai_response = {
-                "open_questions": [
-                    {
-                        "question": "",
-                        "from": "",
-                        "to": ""
-                    },
-                ],
-                "status": random.choice["open", "closed"],
-                "summary": "Demo summary"
-            }
+            # Fetch the actual thread conversation
+            conversation_text = slack_service.fetch_thread_replies(
+                channel_id=stored_thread_info['channel_id'],
+                thread_ts=stored_thread_info['thread_ts']
+            )
+            
+            # Use VertexAI to classify the thread
+            classification_json = vertex_ai.classify_thread(conversation_text)
+            
+            try:
+                # Parse the AI response
+                classification = json.loads(classification_json.replace('```json', '').replace('```', '').strip())
+                
+                # Transform to match expected format
+                ai_response = {
+                    "open_questions": [
+                        {
+                            "question": q.get("question", ""),
+                            "from": q.get("asked_person", ""),
+                            "to": ""  # TODO
+                        } for q in classification.get("open_questions_left", [])
+                    ],
+                    "status": classification.get("thread_state", "open"),
+                    "summary": classification.get("reasoning", "AI analysis completed"),
+                    "action_items": classification.get("action_items", []),
+                    "stakeholders": classification.get("stakeholders", []),
+                    "priority": classification.get("priority", "medium"),
+                    "confidence": classification.get("confidence", 0.5)
+                }
+                
+                print(f"AI Classification: {ai_response['status']} (Priority: {ai_response['priority']}, Confidence: {ai_response['confidence']})")
+                
+            except json.JSONDecodeError as e:
+                print(f"[ERROR] Failed to parse AI response: {e}")
+                # Fallback to demo response
+                ai_response = {
+                    "open_questions": [],
+                    "status": "open",
+                    "summary": "AI parsing failed, using fallback",
+                    "action_items": ["Review conversation manually"],
+                    "stakeholders": [],
+                    "priority": "medium",
+                    "confidence": 0.3
+                }
+            
             # ======== Shikhar need to manage this =======
             final_message = ""
 
@@ -78,7 +113,7 @@ for channel in channels:
     # to make sure we do not miss some thread in computatinal
     # time, so take 30 hours window and neglect already 
     # existed threads.
-    new_threads = slack.fetch_messages_within_range(
+    new_threads = slack_service.fetch_messages_within_range(
         channel_id=channel["channel_id"],
         days=2
     )

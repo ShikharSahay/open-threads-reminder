@@ -83,6 +83,53 @@ class SlackService:
         
         return reply
 
+    def fetch_thread_info(self, thread_ts: str, channel_id: str) -> Dict[str, any]:
+        """
+        Fetch current thread information including reply count and last reply timestamp.
+        
+        Args:
+            thread_ts: Thread timestamp 
+            channel_id: Slack channel ID
+            
+        Returns:
+            Dict with reply_count, latest_reply, and last_reply as datetime
+        """
+        try:
+            response = self.client.conversations_replies(
+                channel=channel_id,
+                ts=thread_ts,
+                limit=1  # Just get the thread info, not all messages
+            )
+            
+            if not response.get('messages'):
+                return {
+                    'reply_count': 0,
+                    'latest_reply': thread_ts,
+                    'last_reply': datetime.fromtimestamp(float(thread_ts))
+                }
+            
+            # Get thread metadata
+            parent_message = response['messages'][0]
+            reply_count = parent_message.get('reply_count', 0)
+            latest_reply = parent_message.get('latest_reply', thread_ts)
+            
+            # Convert timestamp to datetime
+            last_reply_datetime = datetime.fromtimestamp(float(latest_reply))
+            
+            return {
+                'reply_count': reply_count,
+                'latest_reply': latest_reply,
+                'last_reply': last_reply_datetime
+            }
+            
+        except SlackApiError as e:
+            print(f"[ERROR] Failed to fetch thread info for {thread_ts}: {e.response['error']}")
+            return {
+                'reply_count': 0,
+                'latest_reply': thread_ts,
+                'last_reply': datetime.fromtimestamp(float(thread_ts))
+            }
+
     def fetch_messages_within_range(
             self,
             channel_id: str,
