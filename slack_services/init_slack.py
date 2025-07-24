@@ -61,9 +61,9 @@ class SlackService:
                 messages = response.get('messages', [])
                 reply = ""
                 single_line = "\n-----------------------------\n"
-                for message in messages:
+                for message in messages:                    
                     if message['type'] == 'message':
-                        reply = reply + single_line + "[User: " + message['user'] + "]" + ":" + message['text']
+                        reply = reply + single_line + "[User: " + message.get('user', 'unknown') + "]" + ":" + message['text']
 
                 cursor = response.get('response_metadata', {}).get('next_cursor')
                 if not cursor:

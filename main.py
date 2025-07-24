@@ -16,8 +16,8 @@ for channel in channels:
     threads = db.get_open_threads_within_range(
         table=table_name, days=THREAD_CYCLE
     )
+    print(f"Found {len(threads)} open threads in channel {channel['channel_name']}.")
     
-    # Go through each thread
     for stored_thread_info in threads:
         # Check if the len of conversations is matching
         # the len of conversation stored in database.
@@ -27,6 +27,8 @@ for channel in channels:
         )
         if stored_thread_info['reply_count'] < current_thread_info['reply_count']:
             # Will not proceed to validate, since new reply has been added in 24 hours.
+            print(f"New reply found in thread {stored_thread_info['thread_ts']} in channel" + \
+                    "{stored_thread_info['channel_id']}.")
             db.update_thread_conversation_length(
                 thread_id=stored_thread_info["thread_ts"],
                 channel_id=stored_thread_info["channel_id"],
@@ -35,7 +37,6 @@ for channel in channels:
             )
         elif current_thread_info['last_reply'] < (datetime.now() - timedelta(days=RESPONSE_LIMIT)):
             # ======== KRISHNA'S VERTEX AI IMPLEMENTATION ======
-            
             # Fetch the actual thread conversation
             conversation_text = slack_service.fetch_thread_replies(
                 channel_id=stored_thread_info['channel_id'],
@@ -67,7 +68,7 @@ for channel in channels:
                 }
                 
                 print(f"AI Classification: {ai_response['status']} (Priority: {ai_response['priority']}, Confidence: {ai_response['confidence']})")
-                
+                count += 1
             except json.JSONDecodeError as e:
                 print(f"[ERROR] Failed to parse AI response: {e}")
                 # Fallback to demo response
@@ -95,6 +96,7 @@ for channel in channels:
 
                 # Update thread reply count
                 db.update_thread_reply_count(
+                    table=table_name,
                     thread_id=stored_thread_info['thread_ts'],
                     channel_id=stored_thread_info['channel_id'],
                     reply_count=current_thread_info['reply_count'] + 1,
@@ -103,9 +105,12 @@ for channel in channels:
             else:
                 # Update on database that thread is closed.
                 db.update_thread_as_closed(
+                    table=table_name,
                     thread_id=stored_thread_info['thread_ts'],
                     channel_id=stored_thread_info['channel_id']
                 )
+        else:
+            print(f"Thread {stored_thread_info['thread_ts']} in channel {stored_thread_info['channel_id']} is still active or has been recently updated.")
     # Reminiding part done.
 
     # Update last 48 hours slack threads to database
