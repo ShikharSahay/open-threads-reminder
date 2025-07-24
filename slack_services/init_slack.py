@@ -89,9 +89,6 @@ class SlackService:
             days: int,
             request_limit_per_minute: int = DEFAULT_CONFIG['request_limit'],
             messages_per_call: int = DEFAULT_CONFIG['messages_per_call'],
-            dry_run: bool = False,
-            exclude_bot_messages: bool = True,
-            save_to_file: Optional[str] = None
     ) -> List[Dict[str, any]]:
         """
         Fetch messages from Slack channel within time range.
@@ -112,8 +109,8 @@ class SlackService:
                 - user: user
                 - thread_ts: ts
                 - reply_count: int
-                - latest_reply: int
-
+                - latest_reply: int ( timestamp )
+                - channel_id
         """
         all_messages = []
         cursor = None
@@ -143,10 +140,10 @@ class SlackService:
                     if message['type'] == "message":
                         all_messages.append(
                             {
-                                "user": message['user'],
+                                "user_id": message['user'],
                                 "thread_ts": message['ts'],
                                 "reply_count": message.get('reply_count', 0),
-                                "latest_reply": message.get('latest_reply', None),
+                                "latest_reply": message.get('latest_reply', message['ts']),
                                 "channel_id": channel_id
                             }
                         )
