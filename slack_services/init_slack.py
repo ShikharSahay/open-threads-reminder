@@ -292,3 +292,24 @@ class SlackService:
         except SlackApiError as e:
             print(f"[ERROR] Failed to post message: {e.response['error']}")
             return None
+
+    def notify_inactive_slack_thread(
+            self,
+            channel_id: str,
+            thread_ts: str,
+            message_text: str
+    ):
+        """
+        Notify users in an inactive Slack thread.
+
+        Args:
+            channel_id: Channel to post in
+            thread_ts: Parent thread timestamp
+            message_text: Message content (can include context)
+        """
+        print(f"Notifying inactive thread {thread_ts} in channel {channel_id}")
+        reply_ts = self.post_reply_to_thread(channel_id, thread_ts, message_text)
+        if reply_ts:
+            print(f"Notification sent successfully with ts: {reply_ts}")
+        else:
+            print(f"Failed to send notification for thread {thread_ts}")
