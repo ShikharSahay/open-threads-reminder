@@ -21,7 +21,7 @@ class SlackService:
         """Initialize Slack client with SSL context."""
         ssl_context = ssl.create_default_context()
         self.client = WebClient(
-            token=os.getenv("BOT_AUTH_TOKEN"),
+            token=os.getenv("SLACK_BOT_TOKEN"),
             ssl=ssl_context
         )
 
@@ -175,6 +175,50 @@ class SlackService:
                         break
 
         return all_messages
+
+    def get_user_info(self, user_id: str) -> Dict[str, str]:
+        """
+        Get user information from Slack API.
+        
+        Args:
+            user_id: Slack user ID (e.g., U123456789)
+            
+        Returns:
+            Dict with user info (name, display_name, real_name)
+        """
+        try:
+            response = self.client.users_info(user=user_id)
+            user = response['user']
+            return {
+                "user_id": user_id,
+                "name": user.get('name', user_id),
+                "display_name": user.get('profile', {}).get('display_name', user.get('name', user_id)),
+                "real_name": user.get('profile', {}).get('real_name', user.get('name', user_id))
+            }
+        except SlackApiError as e:
+            print(f"[WARNING] Could not fetch user info for {user_id}: {e.response['error']}")
+            return {
+                "user_id": user_id,
+                "name": user_id,
+                "display_name": user_id,
+                "real_name": user_id
+            }
+
+    def resolve_stakeholders(self, user_ids: List[str]) -> List[Dict[str, str]]:
+        """
+        Resolve a list of user IDs to user information.
+        
+        Args:
+            user_ids: List of Slack user IDs
+            
+        Returns:
+            List of user info dicts
+        """
+        resolved_users = []
+        for user_id in user_ids:
+            user_info = self.get_user_info(user_id)
+            resolved_users.append(user_info)
+        return resolved_users
 
     def post_reply_to_thread(
             self,
