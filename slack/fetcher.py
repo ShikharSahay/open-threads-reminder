@@ -3,38 +3,10 @@ from slack_sdk.errors import SlackApiError
 from datetime import datetime, timedelta
 from utils import setup_logger
 
-
 class SlackFetcher:
     def __init__(self):
         self.client = SlackClient().get_client()
         self.logger = setup_logger("SlackFetcher")
-
-    def fetch_parent_messages(self, channel_id, days=90):
-        self.logger.info(f"Fetching parent messages from channel {channel_id} for past {days} days")
-        messages = []
-        oldest = (datetime.now() - timedelta(days=days)).timestamp()
-        has_more = True
-        cursor = None
-
-        try:
-            while has_more:
-                response = self.client.conversations_history(
-                    channel=channel_id,
-                    oldest=oldest,
-                    limit=200,
-                    cursor=cursor
-                )
-                for msg in response.get("messages", []):
-                    if "thread_ts" not in msg:
-                        messages.append(msg)
-
-                has_more = response.get("has_more", False)
-                cursor = response.get("response_metadata", {}).get("next_cursor")
-        except SlackApiError as e:
-            self.logger.error(f"Failed to fetch parent messages: {e.response['error']}")
-
-        self.logger.info(f"Fetched {len(messages)} parent messages.")
-        return messages
 
     def fetch_replies(self, channel_id, thread_ts):
         try:
@@ -45,18 +17,42 @@ class SlackFetcher:
             self.logger.error(f"Failed to fetch replies for thread {thread_ts}: {e.response['error']}")
             return []
 
-    def fetch_all_threads(self, channel_id, days=90):
+    def fetch_full_threads(self, channel_id, days=90):
+        self.logger.info(f"Scanning all messages from channel {channel_id} for past {days} days")
+        oldest = (datetime.now() - timedelta(days=days)).timestamp()
+        has_more = True
+        cursor = None
+        thread_ts_set = set()
         full_threads = []
-        self.logger.info(f"Getting all threads for channel {channel_id}.")
-        parent_messages = self.fetch_parent_messages(channel_id, days=days)
 
-        for msg in parent_messages:
-            thread_ts = msg["ts"]
-            full_convo = self.fetch_replies(channel_id, thread_ts)
-            full_threads.append({
-                "thread_ts": thread_ts,
-                "messages": full_convo
-            })
+        try:
+            while has_more:
+                response = self.client.conversations_history(
+                    channel=channel_id,
+                    oldest=oldest,
+                    limit=200,
+                    cursor=cursor
+                )
+                for msg in response.get("messages", []):
+                    ts = msg.get("ts")
+                    thread_ts = msg.get("thread_ts", ts)
 
-        self.logger.info(f"Got {len(full_threads)} complete threads.")
+                    # Skip if we've already processed this thread
+                    if thread_ts in thread_ts_set:
+                        continue
+
+                    thread_msgs = self.fetch_replies(channel_id, thread_ts)
+                    if thread_msgs:
+                        full_threads.append({
+                            "thread_ts": thread_ts,
+                            "messages": thread_msgs
+                        })
+                        thread_ts_set.add(thread_ts)
+
+                has_more = response.get("has_more", False)
+                cursor = response.get("response_metadata", {}).get("next_cursor")
+        except SlackApiError as e:
+            self.logger.error(f"Failed to fetch messages: {e.response['error']}")
+
+        self.logger.info(f"Collected {len(full_threads)} threads from channel {channel_id}")
         return full_threads
