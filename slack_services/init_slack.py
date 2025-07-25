@@ -83,7 +83,12 @@ class SlackService:
         
         return reply
 
-    def fetch_thread_info(self, thread_ts: str, channel_id: str) -> Dict[str, any]:
+    def fetch_thread_info(
+        self,  
+        thread_ts: str, 
+        channel_id: str, 
+        request_limit_per_minute: int = DEFAULT_CONFIG['request_limit']
+    ) -> Dict[str, any]:
         """
         Fetch current thread information including reply count and last reply timestamp.
         
@@ -115,6 +120,10 @@ class SlackService:
             
             # Convert timestamp to datetime
             last_reply_datetime = datetime.fromtimestamp(float(latest_reply))
+            
+            request_delay = 60 / request_limit_per_minute
+            
+            time.sleep(request_delay)
             
             return {
                 'reply_count': reply_count,
