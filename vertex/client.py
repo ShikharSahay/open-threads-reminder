@@ -8,7 +8,7 @@ load_dotenv()
 class VertexAIClient:
     def __init__(self):
         self.project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
-        self.location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-west1")
+        self.location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
         self.credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
         
         if not self.project_id:

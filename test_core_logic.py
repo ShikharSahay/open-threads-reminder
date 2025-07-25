@@ -19,7 +19,7 @@ def test_vertex_ai_directly(conversation_text: str):
         print("Initializing VertexAI...")
         
         project_id = os.getenv("GOOGLE_CLOUD_PROJECT")
-        location = "us-west1"
+        location = "us-central1"
         
         print(f"   Project: {project_id}")
         print(f"   Location: {location}")
