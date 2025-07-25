@@ -56,7 +56,7 @@ class VertexAIClient:
 
               Your task:
               1. Analyze the conversation.
-              2. Identify thread_state and priority.
+              2. Identify the slack thread_state and priority.
               3. Extract ALL user IDs in the format U123ABC456 (e.g., [User: U123ABC456] or just U123ABC456).
               4. Identify clear action items (as a list of strings).
               5. Identify unresolved questions with the user being asked.
@@ -66,7 +66,7 @@ class VertexAIClient:
               {{
                 "thread_state": "one of: open, closed, resolved, deferred, chit_chat, unknown",
                 "priority": "one of: high, medium, low, none",
-                "confidence": 0.85,
+                "confidence_score": 0.85,
                 "reasoning": "Brief explanation of classification decision",
                 "action_items": ["specific", "actionable", "items"],
                 "stakeholders": ["U123ABC456", "U789DEF012"],

@@ -7,7 +7,7 @@ try:
     with DBClient(DB_CONFIG) as db:
         # Create prerequisite database
         print("Creating database and tables...")
-        db.create_prerequisites("cuto_db", channels)
+        db.create_prerequisites(DB_CONFIG.get('dbname'), channels)
         print("Database setup completed.")
         
         slack = SlackService()
