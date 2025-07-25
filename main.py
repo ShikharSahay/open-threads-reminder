@@ -79,7 +79,6 @@ for channel in channels:
                     "confidence": 0.3
                 }
             
-            # ======== Shikhar need to manage this =======
             final_message = "This thread has not seen any activity in the last 7 days. " \
                             "Please review the conversation and take necessary actions.\n\n" \
                             f"Summary: {ai_response['summary']}\n" \
@@ -131,12 +130,5 @@ for channel in channels:
             table=table_name,
             thread_data=thread_info
         )
-
-# Validate that this thread is duplicate or simillar thread 
-# is present or not.
-
-# Use vector database and find the similarity of this thread.
-
-# Store this embeded thread in vector database.
 
 db.close()
