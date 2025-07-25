@@ -4,7 +4,10 @@ from db.init_db import DBClient
 from config import DB_CONFIG, DB_NAME, channels, RESPONSE_LIMIT, THREAD_CYCLE
 from vertex.client import VertexAIClient
 import json
+import spacy
 
+# Load the NER model
+nlp = spacy.load("en_core_web_sm")
 DB_CONFIG["dbname"] = DB_NAME
 
 db = DBClient(DB_CONFIG)
@@ -42,9 +45,19 @@ for channel in channels:
                 channel_id=stored_thread_info['channel_id'],
                 thread_ts=stored_thread_info['thread_ts']
             )
+            doc = nlp(conversation_text)
+            clean_conversation_text = conversation_text
+
+            for ent in reversed(doc.ents):
+                if ent.label_ in ["ORG"]:
+                    clean_conversation_text = (
+                        clean_conversation_text[:ent.start_char]
+                         + "[COMPANY]"
+                         + clean_conversation_text[ent.end_char:]
+                    )
             
             # Use VertexAI to classify the thread
-            classification_json = vertex_ai.classify_thread(conversation_text)
+            classification_json = vertex_ai.classify_thread(clean_conversation_text)
             
             try:
                 # Parse the AI response
