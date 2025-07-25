@@ -231,19 +231,31 @@ class VertexAIClient:
         state = classification.get("thread_state")
         priority = classification.get("priority")
         action_items = classification.get("action_items", [])
+        stakeholders = classification.get("stakeholders", [])
         
+        # Create bold heading with alert emoji
         if state == ThreadState.DEFERRED.value:
-            base_text = f"Deferred thread reminder: {days_inactive} days inactive."
+            base_text = f":alert: *Deferred Thread Reminder*\n\n"
         elif state == ThreadState.OPEN.value:
-            base_text = f"Open thread reminder: {days_inactive} days inactive."
+            base_text = f":alert: *Open Thread Reminder*\n\n"
         else:
-            base_text = f"Thread attention needed: {days_inactive} days inactive."
+            base_text = f":alert: *Thread Attention Needed*\n\n"
+        
+        base_text += f"This thread has been inactive for {days_inactive} days. Please review and take necessary actions.\n\n"
+        
+        # Add key-value pairs with italic keys
+        base_text += f">_Days Inactive:_ {days_inactive}\n"
+        
+        if priority:
+            base_text += f">_Priority:_ {priority.upper()}\n"
         
         if action_items:
-            base_text += f"\n\nPending actions:\n" + "\n".join([f"- {item}" for item in action_items])
+            action_text = ', '.join(action_items)
+            base_text += f">_Action Items:_ {action_text}\n"
         
-        if priority in [ThreadPriority.HIGH.value, ThreadPriority.MEDIUM.value]:
-            base_text += f"\n\nPriority: {priority.upper()}"
+        if stakeholders:
+            stakeholder_mentions = [f"<@{user_id}>" for user_id in stakeholders]
+            base_text += f">_Stakeholders:_ {' '.join(stakeholder_mentions)}\n"
         
-        base_text += "\n\nPlease review and update."
+        base_text += f"\n>Please review and update this thread."
         return base_text

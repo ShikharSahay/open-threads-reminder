@@ -121,7 +121,7 @@ class DBClient:
             ON CONFLICT (thread_ts, channel_id)
             DO UPDATE SET
                 reply_count = EXCLUDED.reply_count,
-                latest_reply = EXCLUDED.latest_reply,
+                latest_reply = EXCLUDED.latest_reply
         """).format(sql.Identifier(table))
 
         # Prepare the dict for SQL (replace Slack ts string with datetime object)

@@ -1,9 +1,11 @@
 from slack_services.init_slack import SlackService
 from datetime import datetime, timedelta, timezone
 from db.init_db import DBClient
-from config import DB_CONFIG, channels, RESPONSE_LIMIT, THREAD_CYCLE
+from config import DB_CONFIG, DB_NAME, channels, RESPONSE_LIMIT, THREAD_CYCLE
 from vertex.client import VertexAIClient
 import json
+
+DB_CONFIG["dbname"] = DB_NAME
 
 db = DBClient(DB_CONFIG)
 slack_service = SlackService()
@@ -79,12 +81,30 @@ for channel in channels:
                     "confidence": 0.3
                 }
             
-            final_message = "This thread has not seen any activity in the last 7 days. " \
-                            "Please review the conversation and take necessary actions.\n\n" \
-                            f"Summary: {ai_response['summary']}\n" \
-                            f"Confidence: {ai_response['confidence']}\n" \
-                            f"Stakeholders: {', '.join(ai_response['stakeholders'])}\n" \
-                            f"Action Items: {', '.join(ai_response['action_items'])}\n"
+            # ======== Shikhar need to manage this =======
+            
+            # Create stakeholder mentions for tagging
+            stakeholder_mentions = []
+            if ai_response.get('stakeholders'):
+                stakeholder_mentions = [f"<@{user_id}>" for user_id in ai_response['stakeholders']]
+            
+            # Format open questions if available
+            open_questions_text = "None"
+            if ai_response.get('open_questions_left'):
+                questions = [q.get('question', 'Unknown question') for q in ai_response['open_questions_left']]
+                open_questions_text = ', '.join(questions)
+            elif ai_response.get('action_items'):
+                open_questions_text = ', '.join(ai_response['action_items'])
+            
+            # Format message with bold heading and block quotes using italic keys
+            final_message = f":alert: *Reminder Alert*\n\n" \
+                            f"This thread has not seen any activity in the last 7 days. " \
+                            f"Please review the conversation and take necessary actions.\n\n" \
+                            f">_Summary:_ {ai_response['summary']}\n" \
+                            f">_Priority:_ {ai_response.get('priority', 'Not specified')}\n" \
+                            f">_Open Questions:_ {open_questions_text}\n" \
+                            f">_Stakeholders:_ {' '.join(stakeholder_mentions) if stakeholder_mentions else 'None'}"
+            
             print(f"Final message to be sent: {final_message}")
 
             if ai_response["status"] == "open":
