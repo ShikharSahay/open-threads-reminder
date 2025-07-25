@@ -4,7 +4,7 @@ slack_service = SlackService()
 
 print("🤖 Testing Bot Message Deletion")
 print("=" * 50)
-print("\n1️⃣ Testing deletion of USER MESSAGE (should fail):")
+print("\nTesting deletion of USER MESSAGE (should fail):")
 print("   Attempting to delete ts: 1753346878.747939")
 result1 = slack_service.delete_message(
     channel_id="C096TJLR1GF",
