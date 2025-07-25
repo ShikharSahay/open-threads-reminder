@@ -12,7 +12,7 @@ load_dotenv()
 
 class SlackService:
     DEFAULT_CONFIG = {
-        'request_limit': 10,
+        'request_limit': 6,
         'messages_per_call': 100,
         'max_retries': 3
     }
@@ -73,7 +73,7 @@ class SlackService:
 
             except SlackApiError as e:
                 if e.response.status_code == 429:
-                    retry_after = int(e.response.headers.get("Retry-After", 10))
+                    retry_after = int(e.response.headers.get("Retry-After", 60))
                     print(f"Rate limited on thread fetch. Sleeping {retry_after}s...")
                     time.sleep(retry_after)
                 else:
