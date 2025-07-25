@@ -52,3 +52,6 @@ uritemplate==4.2.0
 urllib3==2.5.0
 websockets==15.0.1
 mcp==1.0.0
+spacy>=3.7.2
+# Include the small English model by using the Git URL
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
