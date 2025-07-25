@@ -1,13 +1,13 @@
 from db.init_db import DBClient
 from slack_services.init_slack import SlackService
-from config import DB_CONFIG, channels
+from config import DB_CONFIG, channels, DB_NAME
 
 try:
     # Use context manager for proper resource cleanup
     with DBClient(DB_CONFIG) as db:
         # Create prerequisite database
         print("Creating database and tables...")
-        db.create_prerequisites(DB_CONFIG.get('dbname'), channels)
+        db.create_prerequisites(DB_NAME, channels)
         print("Database setup completed.")
         
         slack = SlackService()
