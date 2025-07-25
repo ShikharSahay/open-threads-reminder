@@ -104,12 +104,13 @@ for channel in channels:
                             f">_Priority:_ {ai_response.get('priority', 'Not specified')}\n" \
                             f">_Open Questions:_ {open_questions_text}\n" \
                             f">_Stakeholders:_ {' '.join(stakeholder_mentions) if stakeholder_mentions else 'None'}"
-            
-            print(f"Final message to be sent: {final_message}")
 
             if ai_response["status"] == "open":
                 # to-do: Refine the slack message
                 print(f"Sending response over slack message.")
+                print(f"Final message to be sent: {final_message}")
+                print(f"Thread ID: {stored_thread_info['thread_ts']}")
+                print(f"Channel ID: {stored_thread_info['channel_id']}")
                 slack_service.notify_inactive_slack_thread(
                     channel_id=stored_thread_info['channel_id'],
                     message_text=final_message,

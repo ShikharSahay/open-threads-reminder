@@ -20,10 +20,22 @@ class SlackService:
     def __init__(self):
         """Initialize Slack client with SSL context."""
         ssl_context = ssl.create_default_context()
+        
+        # Initialize bot client (for posting messages, reading history, etc.)
         self.client = WebClient(
             token=os.getenv("SLACK_BOT_TOKEN"),
             ssl=ssl_context
         )
+        
+        # Store bot user ID for checking message ownership
+        self.bot_user_id = None
+        try:
+            auth_response = self.client.auth_test()
+            if auth_response['ok']:
+                self.bot_user_id = auth_response['user_id']
+                print(f"Bot initialized - User ID: {self.bot_user_id}")
+        except SlackApiError:
+            print("Warning: Could not get bot user ID")
 
     def fetch_thread_replies(
             self,
@@ -200,7 +212,8 @@ class SlackService:
                                 "thread_ts": message['ts'],
                                 "reply_count": message.get('reply_count', 0),
                                 "latest_reply": message.get('latest_reply', message['ts']),
-                                "channel_id": channel_id
+                                "channel_id": channel_id,
+                                "status": "open"
                             }
                         )
 
@@ -277,7 +290,8 @@ class SlackService:
             self,
             channel_id: str,
             thread_ts: str,
-            message_text: str
+            message_text: str,
+            request_limit_per_minute: int = DEFAULT_CONFIG['request_limit'],
     ):
         """
         Posts a reply in a Slack thread, tagging specified users.
@@ -290,17 +304,21 @@ class SlackService:
         Returns:
             Message ts of the reply, or None on failure
         """
-        try:
-            response = self.client.chat_postMessage(
-                channel=channel_id,
-                text=message_text,
-                thread_ts=thread_ts
-            )
-            print(f"Posted reply to thread {thread_ts}")
-            return response['ts']
-        except SlackApiError as e:
-            print(f"[ERROR] Failed to post message: {e.response['error']}")
-            return None
+        request_delay = 60 / request_limit_per_minute
+        
+        while True:
+          try:
+              response = self.client.chat_postMessage(
+                  channel=channel_id,
+                  text=message_text,
+                  thread_ts=thread_ts
+              )
+              print(f"Posted reply to thread {thread_ts}")
+              return response['ts']
+          except SlackApiError as e:
+              print(f"[ERROR] Failed to post message: {e.response['error']}")
+              print(f"Retrying after {request_delay} seconds")
+              time.sleep(request_delay)
 
     def notify_inactive_slack_thread(
             self,
@@ -322,3 +340,128 @@ class SlackService:
             print(f"Notification sent successfully with ts: {reply_ts}")
         else:
             print(f"Failed to send notification for thread {thread_ts}")
+            
+    def delete_message(self, channel_id: str, message_ts: str):
+        """
+        Delete a bot message from a Slack channel.
+        
+        Args:
+            channel_id: Channel containing the message
+            message_ts: Timestamp of the message to delete
+        
+        Note:
+            Bot tokens can only delete messages posted by that bot.
+            This method will verify the message was posted by this bot before attempting deletion.
+        
+        Returns:
+            True if deletion successful, False otherwise
+        """
+        try:
+            response = self.client.chat_delete(
+                channel=channel_id,
+                ts=message_ts
+            )
+            print(f"✅ Bot message deleted successfully: {response['ok']}")
+            return True
+            
+        except SlackApiError as e:
+            error_code = e.response['error']
+            print(f"❌ Error deleting message: {error_code}")
+            
+            # Provide helpful error explanations
+            if error_code == 'cant_delete_message':
+                print("💡 Bot tokens can only delete messages posted by that bot.")
+                print("   Make sure this message was posted by your bot.")
+            elif error_code == 'message_not_found':
+                print("💡 The message doesn't exist or timestamp is invalid.")
+            elif error_code == 'channel_not_found':
+                print("💡 The channel ID is invalid or bot doesn't have access.")
+            elif error_code == 'missing_scope':
+                print("💡 Missing required scope: chat:write")
+                print("   Add 'chat:write' scope to your Slack app at https://api.slack.com/apps")
+                
+            return False
+    
+    def get_message_info(self, channel_id: str, message_ts: str) -> Optional[Dict[str, any]]:
+        """
+        Get information about a specific message.
+        
+        Args:
+            channel_id: Channel containing the message
+            message_ts: Timestamp of the message
+            
+        Returns:
+            Message information dict or None if not found
+        """
+        try:
+            # Get conversation history with a very small window around the timestamp
+            response = self.client.conversations_history(
+                channel=channel_id,
+                inclusive=True,
+                oldest=message_ts,
+                latest=message_ts,
+                limit=1
+            )
+            
+            messages = response.get('messages', [])
+            if messages and messages[0].get('ts') == message_ts:
+                return messages[0]
+            return None
+            
+        except SlackApiError as e:
+            print(f"❌ Error getting message info: {e.response['error']}")
+            return None
+    
+    def is_bot_message(self, channel_id: str, message_ts: str) -> bool:
+        """
+        Check if a message was posted by this bot.
+        
+        Args:
+            channel_id: Channel containing the message
+            message_ts: Timestamp of the message
+            
+        Returns:
+            True if message was posted by this bot, False otherwise
+        """
+        if not self.bot_user_id:
+            return False
+            
+        message_info = self.get_message_info(channel_id, message_ts)
+        if not message_info:
+            return False
+            
+        return message_info.get('user') == self.bot_user_id or message_info.get('bot_id') is not None
+    
+    def delete_bot_message(self, channel_id: str, message_ts: str) -> bool:
+        """
+        Delete a message, but only if it was posted by this bot.
+        This method verifies message ownership before attempting deletion.
+        
+        Args:
+            channel_id: Channel containing the message
+            message_ts: Timestamp of the message
+            
+        Returns:
+            True if deletion successful, False otherwise
+        """
+        print(f"🔍 Verifying bot message ownership for ts: {message_ts}")
+        
+        # Get message info first
+        message_info = self.get_message_info(channel_id, message_ts)
+        if not message_info:
+            print("❌ Message not found or not accessible")
+            return False
+        
+        user_id = message_info.get('user')
+        bot_id = message_info.get('bot_id')
+        
+        print(f"📧 Message info: user={user_id}, bot_id={bot_id}, our_bot_id={self.bot_user_id}")
+        
+        # Check if it's our bot's message
+        if user_id == self.bot_user_id or (bot_id and user_id == self.bot_user_id):
+            print("🤖 Confirmed: This is our bot's message - proceeding with deletion")
+            return self.delete_message(channel_id, message_ts)
+        else:
+            print("❌ This is NOT our bot's message - cannot delete")
+            print("   Bot tokens can only delete messages posted by that specific bot")
+            return False
