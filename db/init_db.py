@@ -106,23 +106,29 @@ class DBClient:
         ts_float = float(ts_latest_reply)
         sql_timestamp = datetime.fromtimestamp(ts_float)
 
+        ts_created_at = thread_data['thread_ts']
+        ts_float = float(ts_created_at)
+        sql_created_at = datetime.fromtimestamp(ts_float)
+
         query = sql.SQL("""
-            INSERT INTO {} (thread_ts, channel_id, user_id, reply_count, latest_reply, status)
+            INSERT INTO {} (
+                thread_ts, channel_id, user_id, reply_count, latest_reply, status, created_at
+            )
             VALUES (
-                %(thread_ts)s, %(channel_id)s, %(user_id)s,
-                %(reply_count)s, %(latest_reply)s, %(status)s
+                %(thread_ts)s, %(channel_id)s, %(user_id)s, %(reply_count)s,
+                %(latest_reply)s, %(status)s, %(created_at)s
             )
             ON CONFLICT (thread_ts, channel_id)
             DO UPDATE SET
                 reply_count = EXCLUDED.reply_count,
                 latest_reply = EXCLUDED.latest_reply,
-                status = EXCLUDED.status
         """).format(sql.Identifier(table))
 
         # Prepare the dict for SQL (replace Slack ts string with datetime object)
         thread_data_sql = {
             **thread_data,
-            'latest_reply': sql_timestamp
+            'latest_reply': sql_timestamp,
+            'created_at': sql_created_at
         }
 
         try:

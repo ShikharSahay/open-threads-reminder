@@ -7,6 +7,7 @@ DB_CONFIG = {
     "host": "localhost",
     "port": "5432"
 }
+DB_NAME = "open_thread_db"
 channels = [
     {
         "channel_name":"vishal-testing-slack",
