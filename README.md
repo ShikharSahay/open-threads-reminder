@@ -19,7 +19,7 @@ Agent can be used for keeping track of all the open converstations on the #yb-us
 
 ![Open Threads Architecture Diagram](screenshots/arc_diagram.svg)
 
-## UI
+## Open Threads Dashboard
 ![Open Threads Dashboard](screenshots/image_1.png)
 
 Below are sample images showing tracked Slack threads:
