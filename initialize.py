@@ -1,50 +1,48 @@
 from db.init_db import DBClient
-from slack_services.init_slack import SlackService
-from config import DB_CONFIG, channels, DB_NAME
+from config import DB_CONFIG, DB_NAME, channels
 
-try:
-    # Use context manager for proper resource cleanup
-    with DBClient(DB_CONFIG) as db:
-        # Create prerequisite database
-        print("Creating database and tables...")
+def initialize_enhanced_database():
+    """Initialize the database with enhanced schema for dashboard."""
+    
+    print("🚀 Initializing enhanced database schema...")
+    
+    # Connect to database without specifying a database first
+    init_config = DB_CONFIG.copy()
+    if "dbname" in init_config:
+        del init_config["dbname"]
+    
+    db = DBClient(init_config)
+    
+    try:
+        # Create database and all tables with enhanced schema
         db.create_prerequisites(DB_NAME, channels)
-        print("Database setup completed.")
         
-        slack = SlackService()
-        total_threads = 0
+        print("✅ Database initialization completed!")
+        print("\nCreated/Updated:")
+        print("  📊 Master channels table")
+        print("  👥 User profiles cache table")
+        print("  🧵 Enhanced channel tables with AI analysis columns")
         
-        for i, channel in enumerate(channels, 1):
-            channel_id = channel['channel_id']
-            channel_name = channel["channel_name"]
-            table_name = channel_name.replace("-", "_")
-            
-            print(f"Processing channel {i}/{len(channels)}: {channel_name}")
-            
-            try:
-                threads = slack.fetch_messages_within_range(
-                    channel_id=channel_id,
-                    days=90,
-                )
-                
-                print(f"Found {len(threads)} threads in {channel_name}")
-                
-                for thread in threads:
-                    # Initial status of all threads will be open.
-                    thread['status'] = 'open'
-                    db.store_thread_in_table(
-                        table=table_name,
-                        thread_data=thread
-                    )
-                
-                total_threads += len(threads)
-                print(f"Completed {channel_name}: {len(threads)} threads stored")
-                
-            except Exception as e:
-                print(f"Error processing channel {channel_name}: {e}")
-                continue
+        # Test the setup by checking channels
+        print("\n🔍 Verifying setup...")
+        all_channels = db.get_all_channels()
+        print(f"  - Found {len(all_channels)} channels configured")
         
-        print(f"All insertion done. Total threads processed: {total_threads}")
+        for channel in all_channels:
+            print(f"    📢 {channel['channel_name']} -> {channel['table_name']}")
+        
+        print("\n🎯 Enhanced features available:")
+        print("  ✨ AI-generated thread names and descriptions")
+        print("  🎭 Cached Slack user profiles with display pictures")
+        print("  🏷️ Automated stakeholder extraction")
+        print("  📈 Channel statistics tracking")
+        print("  🔗 GitHub/Thread issue linking support")
+        
+    except Exception as e:
+        print(f"❌ Error during initialization: {e}")
+        raise
+    finally:
+        db.close()
 
-except Exception as e:
-    print(f"Initialization failed: {e}")
-    exit(1)
+if __name__ == "__main__":
+    initialize_enhanced_database()

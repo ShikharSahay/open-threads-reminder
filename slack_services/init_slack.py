@@ -229,7 +229,8 @@ class SlackService:
             except SlackApiError as e:
                 retry_count += 1
                 if e.response['error'] == 'not_in_channel':
-                    print("Error: Bot needs to be added to channel first")
+                    print(f"⚠️ Bot not in channel {channel_id} - Cannot fetch messages")
+                    print(f"💡 To fix: Add the bot to the Slack channel first")
                     break
                 elif e.response.status_code == 429:
                     retry_after = int(e.response.headers.get('Retry-After', 10))
@@ -244,47 +245,243 @@ class SlackService:
 
     def get_user_info(self, user_id: str) -> Dict[str, str]:
         """
-        Get user information from Slack API.
+        Get user information from Slack API with enhanced profile data.
         
         Args:
             user_id: Slack user ID (e.g., U123456789)
             
         Returns:
-            Dict with user info (name, display_name, real_name)
+            Dict with comprehensive user info including profile images
         """
-        try:
-            response = self.client.users_info(user=user_id)
-            user = response['user']
-            return {
-                "user_id": user_id,
-                "name": user.get('name', user_id),
-                "display_name": user.get('profile', {}).get('display_name', user.get('name', user_id)),
-                "real_name": user.get('profile', {}).get('real_name', user.get('name', user_id))
-            }
-        except SlackApiError as e:
-            print(f"[WARNING] Could not fetch user info for {user_id}: {e.response['error']}")
-            return {
-                "user_id": user_id,
-                "name": user_id,
-                "display_name": user_id,
-                "real_name": user_id
-            }
+        request_delay = 60 / self.DEFAULT_CONFIG['request_limit']
+        retry_count = 0
+        
+        while retry_count < self.DEFAULT_CONFIG['max_retries']:
+            try:
+                response = self.client.users_info(user=user_id)
+                user = response['user']
+                profile = user.get('profile', {})
+                
+                return {
+                    "user_id": user_id,
+                    "name": user.get('name', user_id),
+                    "display_name": profile.get('display_name', user.get('name', user_id)),
+                    "real_name": profile.get('real_name', user.get('name', user_id)),
+                    "profile_image_url": profile.get('image_original', profile.get('image_512', '')),
+                    "profile_image_24": profile.get('image_24', ''),
+                    "profile_image_32": profile.get('image_32', ''),
+                    "profile_image_48": profile.get('image_48', ''),
+                    "profile_image_72": profile.get('image_72', '')
+                }
+            except SlackApiError as e:
+                retry_count += 1
+                if e.response.status_code == 429:
+                    retry_after = int(e.response.headers.get("Retry-After", request_delay))
+                    print(f"Rate limited on user info fetch. Sleeping {retry_after}s...")
+                    time.sleep(retry_after)
+                elif e.response['error'] == 'user_not_found':
+                    print(f"[WARNING] User not found: {user_id}")
+                    return {
+                        "user_id": user_id,
+                        "name": user_id,
+                        "display_name": f"Unknown User ({user_id})",
+                        "real_name": f"Unknown User ({user_id})",
+                        "profile_image_url": '',
+                        "profile_image_24": '',
+                        "profile_image_32": '',
+                        "profile_image_48": '',
+                        "profile_image_72": ''
+                    }
+                else:
+                    print(f"[WARNING] Could not fetch user info for {user_id}: {e.response['error']}")
+                    time.sleep(request_delay)
+                    
+        # Fallback after max retries
+        return {
+            "user_id": user_id,
+            "name": user_id,
+            "display_name": user_id,
+            "real_name": user_id,
+            "profile_image_url": '',
+            "profile_image_24": '',
+            "profile_image_32": '',
+            "profile_image_48": '',
+            "profile_image_72": ''
+        }
 
-    def resolve_stakeholders(self, user_ids: List[str]) -> List[Dict[str, str]]:
+    def batch_fetch_user_profiles(self, user_ids: List[str], db_client=None) -> List[Dict[str, str]]:
         """
-        Resolve a list of user IDs to user information.
+        Batch fetch user profiles with caching to minimize API calls.
         
         Args:
             user_ids: List of Slack user IDs
+            db_client: Optional database client for caching
             
         Returns:
-            List of user info dicts
+            List of user profile dicts
         """
-        resolved_users = []
-        for user_id in user_ids:
-            user_info = self.get_user_info(user_id)
-            resolved_users.append(user_info)
-        return resolved_users
+        profiles = []
+        users_to_fetch = []
+        
+        # Check cache first if db_client provided
+        if db_client:
+            for user_id in user_ids:
+                cached_profile = db_client.get_user_profile(user_id)
+                if cached_profile:
+                    profiles.append(dict(cached_profile))
+                else:
+                    users_to_fetch.append(user_id)
+        else:
+            users_to_fetch = user_ids
+        
+        # Fetch missing profiles from Slack API
+        request_delay = 60 / self.DEFAULT_CONFIG['request_limit']
+        
+        for user_id in users_to_fetch:
+            print(f"Fetching profile for user: {user_id}")
+            profile = self.get_user_info(user_id)
+            profiles.append(profile)
+            
+            # Cache in database if available
+            if db_client:
+                try:
+                    db_client.store_user_profile(profile)
+                except Exception as e:
+                    print(f"[WARNING] Failed to cache user profile for {user_id}: {e}")
+            
+            # Rate limiting between requests
+            if len(users_to_fetch) > 1:
+                time.sleep(request_delay)
+        
+        return profiles
+
+    def resolve_stakeholders(self, user_ids: List[str], db_client=None) -> List[Dict[str, str]]:
+        """
+        Resolve a list of user IDs to user information with caching.
+        
+        Args:
+            user_ids: List of Slack user IDs
+            db_client: Optional database client for caching
+            
+        Returns:
+            List of user info dicts with profile images
+        """
+        if not user_ids:
+            return []
+            
+        # Remove duplicates while preserving order
+        unique_user_ids = list(dict.fromkeys(user_ids))
+        
+        return self.batch_fetch_user_profiles(unique_user_ids, db_client)
+
+    def extract_user_ids_from_conversation(self, conversation_text: str) -> List[str]:
+        """
+        Extract user IDs from conversation text using regex.
+        
+        Args:
+            conversation_text: Raw conversation text
+            
+        Returns:
+            List of unique user IDs found in the conversation
+        """
+        import re
+        # Match Slack user ID format: U followed by 8+ alphanumeric characters
+        user_ids = re.findall(r'U[A-Z0-9]{8,}', conversation_text)
+        # Remove duplicates while preserving order
+        return list(dict.fromkeys(user_ids))
+
+    def extract_github_issues_from_conversation(self, conversation_text: str) -> List[str]:
+        """
+        Extract GitHub issue references from conversation text.
+        
+        Args:
+            conversation_text: Raw conversation text
+            
+        Returns:
+            List of GitHub issue references (e.g., ["owner/repo#123", "org/project#456"])
+        """
+        import re
+        # Match patterns like: owner/repo#123, org/project#456
+        github_patterns = [
+            r'([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)#(\d+)',  # owner/repo#123
+            r'https://github\.com/([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)/issues/(\d+)',  # Full GitHub URLs
+            r'github\.com/([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)/issues/(\d+)'  # Partial GitHub URLs
+        ]
+        
+        github_issues = []
+        
+        for pattern in github_patterns:
+            matches = re.findall(pattern, conversation_text, re.IGNORECASE)
+            for match in matches:
+                if len(match) == 2:  # (owner/repo, issue_number)
+                    github_ref = f"{match[0]}#{match[1]}"
+                    if github_ref not in github_issues:
+                        github_issues.append(github_ref)
+        
+        return github_issues
+
+    def extract_jira_tickets_from_conversation(self, conversation_text: str) -> List[str]:
+        """
+        Extract Jira ticket references from conversation text.
+        
+        Args:
+            conversation_text: Raw conversation text
+            
+        Returns:
+            List of Jira ticket references (e.g., ["PROJECT-123", "TEAM-456"])
+        """
+        import re
+        # Match patterns like: PROJECT-123, TEAM-456, ABC-789
+        jira_patterns = [
+            r'\b([A-Z]{2,10}-\d{1,6})\b',  # PROJECT-123 format
+            r'https://[a-zA-Z0-9_.-]+\.atlassian\.net/browse/([A-Z]{2,10}-\d{1,6})',  # Full Jira URLs
+            r'atlassian\.net/browse/([A-Z]{2,10}-\d{1,6})',  # Partial Jira URLs
+            r'jira\..*?/browse/([A-Z]{2,10}-\d{1,6})'  # Generic Jira browse URLs
+        ]
+        
+        jira_tickets = []
+        
+        for pattern in jira_patterns:
+            matches = re.findall(pattern, conversation_text, re.IGNORECASE)
+            for match in matches:
+                ticket = match if isinstance(match, str) else match[0]
+                if ticket not in jira_tickets:
+                    jira_tickets.append(ticket)
+        
+        return jira_tickets
+
+    def extract_thread_issues_from_conversation(self, conversation_text: str) -> List[str]:
+        """
+        Extract internal thread issue references from conversation text.
+        
+        Args:
+            conversation_text: Raw conversation text
+            
+        Returns:
+            List of thread issue references (e.g., ["#123", "#456"])
+        """
+        import re
+        # Match patterns like: #123, #456 (but not GitHub-style owner/repo#123)
+        thread_pattern = r'(?<!/)#(\d{1,6})\b'  # #123 but not repo#123
+        
+        matches = re.findall(thread_pattern, conversation_text)
+        return [f"#{match}" for match in matches if match]
+
+    def extract_all_issue_references(self, conversation_text: str) -> Dict[str, List[str]]:
+        """
+        Extract all types of issue references from conversation text.
+        
+        Args:
+            conversation_text: Raw conversation text
+            
+        Returns:
+            Dict with github_issues, jira_tickets, and thread_issues lists
+        """
+        return {
+            "github_issues": self.extract_github_issues_from_conversation(conversation_text),
+            "jira_tickets": self.extract_jira_tickets_from_conversation(conversation_text),
+            "thread_issues": self.extract_thread_issues_from_conversation(conversation_text)
+        }
 
     def post_reply_to_thread(
             self,
@@ -333,13 +530,18 @@ class SlackService:
             channel_id: Channel to post in
             thread_ts: Parent thread timestamp
             message_text: Message content (can include context)
+            
+        Returns:
+            Message timestamp if successful, None if failed
         """
         print(f"Notifying inactive thread {thread_ts} in channel {channel_id}")
         reply_ts = self.post_reply_to_thread(channel_id, thread_ts, message_text)
         if reply_ts:
             print(f"Notification sent successfully with ts: {reply_ts}")
+            return reply_ts
         else:
             print(f"Failed to send notification for thread {thread_ts}")
+            return None
             
     def delete_message(self, channel_id: str, message_ts: str):
         """
@@ -465,3 +667,149 @@ class SlackService:
             print("❌ This is NOT our bot's message - cannot delete")
             print("   Bot tokens can only delete messages posted by that specific bot")
             return False
+
+    def check_recent_activity_source(self, channel_id: str, thread_ts: str, since_timestamp: datetime) -> dict:
+        """
+        Check if recent activity in a thread was from bot or humans.
+        
+        Args:
+            channel_id: Slack channel ID
+            thread_ts: Thread timestamp
+            since_timestamp: Check activity since this time
+            
+        Returns:
+            Dict with activity analysis: {
+                'has_human_activity': bool,
+                'has_bot_activity': bool, 
+                'latest_human_reply': datetime or None,
+                'latest_bot_reply': datetime or None,
+                'total_new_replies': int
+            }
+        """
+        try:
+            # Get bot user ID for comparison
+            auth_response = self.client.auth_test()
+            bot_user_id = auth_response.get('user_id')
+            
+            # Get thread replies since the timestamp
+            response = self.client.conversations_replies(
+                channel=channel_id,
+                ts=thread_ts,
+                oldest=since_timestamp.timestamp(),
+                limit=100  # Should be enough for recent activity
+            )
+            
+            if not response['ok']:
+                print(f"Failed to fetch recent thread activity: {response.get('error', 'Unknown error')}")
+                return {
+                    'has_human_activity': False,
+                    'has_bot_activity': False,
+                    'latest_human_reply': None,
+                    'latest_bot_reply': None,
+                    'total_new_replies': 0
+                }
+            
+            messages = response.get('messages', [])
+            # Skip the parent message, only look at replies
+            replies = [msg for msg in messages if msg.get('ts') != thread_ts]
+            
+            human_replies = []
+            bot_replies = []
+            
+            for reply in replies:
+                reply_time = datetime.fromtimestamp(float(reply['ts']), tz=timezone.utc)
+                
+                # Only consider replies after the since_timestamp
+                if reply_time > since_timestamp:
+                    if reply.get('user') == bot_user_id or reply.get('bot_id'):
+                        bot_replies.append(reply_time)
+                    else:
+                        human_replies.append(reply_time)
+            
+            return {
+                'has_human_activity': len(human_replies) > 0,
+                'has_bot_activity': len(bot_replies) > 0,
+                'latest_human_reply': max(human_replies) if human_replies else None,
+                'latest_bot_reply': max(bot_replies) if bot_replies else None,
+                'total_new_replies': len(human_replies) + len(bot_replies)
+            }
+            
+        except SlackApiError as e:
+            print(f"Error checking recent activity: {e.response['error']}")
+            return {
+                'has_human_activity': False,
+                'has_bot_activity': False,
+                'latest_human_reply': None,
+                'latest_bot_reply': None,
+                'total_new_replies': 0
+            }
+
+    def is_bot_user(self, user_id: str) -> bool:
+        """
+        Check if a user ID belongs to a bot.
+        
+        Args:
+            user_id: Slack user ID to check
+            
+        Returns:
+            True if user is a bot, False if human user
+        """
+        try:
+            # Bot user IDs sometimes start with 'B' instead of 'U'
+            if user_id.startswith('B'):
+                return True
+            
+            # Get user info to check if it's a bot
+            response = self.client.users_info(user=user_id)
+            if response['ok']:
+                user = response['user']
+                # Check various bot indicators
+                is_bot = (
+                    user.get('is_bot', False) or 
+                    user.get('is_app_user', False) or
+                    'bot_id' in user or
+                    user.get('name', '').endswith('.bot') or
+                    user.get('real_name', '').lower().endswith('bot')
+                )
+                return is_bot
+            return False
+            
+        except SlackApiError as e:
+            # If we can't determine, assume it's human (safer for notifications)
+            if e.response['error'] == 'user_not_found':
+                print(f"User {user_id} not found - treating as human")
+            else:
+                print(f"Error checking if user {user_id} is bot: {e.response['error']}")
+            return False
+
+    def filter_human_stakeholders(self, user_ids: List[str]) -> List[str]:
+        """
+        Filter out bots from a list of user IDs, keeping only human users.
+        Also excludes the bot's own user ID.
+        
+        Args:
+            user_ids: List of user IDs to filter
+            
+        Returns:
+            List of user IDs that belong to human users only
+        """
+        # Get bot's own user ID to exclude it
+        try:
+            auth_response = self.client.auth_test()
+            bot_user_id = auth_response.get('user_id')
+        except:
+            bot_user_id = None
+        
+        human_users = []
+        for user_id in user_ids:
+            # Skip the bot's own user ID
+            if user_id == bot_user_id:
+                print(f"🤖 Excluded bot's own user ID: {user_id}")
+                continue
+                
+            if not self.is_bot_user(user_id):
+                human_users.append(user_id)
+            else:
+                print(f"🤖 Filtered out bot user: {user_id}")
+        
+        return human_users
