@@ -90,7 +90,7 @@ def ensure_database_setup():
         return False
         
     except Exception as e:
-        print(f"🚨 Database setup error: {e}")
+        print(f":alert: Database setup error: {e}")
         print("🔧 Attempting to create fresh setup...")
         
         try:
@@ -177,60 +177,60 @@ def generate_ai_thread_name(ai_response: dict) -> str:
 
 def process_ai_analysis(slack_service, conversation_text: str, thread_info: dict, existing_ai_data: dict = None) -> dict:
     """
-    Process AI analysis for a thread, with smart caching and activity detection.
-    Only calls AI if:
-    1. No existing AI analysis, OR
-    2. New human activity detected since last analysis
+    Process AI analysis for a thread, with smart caching to avoid redundant calls.
     
     Args:
-        slack_service: Slack service instance
-        conversation_text: Thread conversation text
-        thread_info: Current thread information
-        existing_ai_data: Previously cached AI analysis (if any)
-    """
+        slack_service: SlackService instance for API calls
+        conversation_text: Full conversation text
+        thread_info: Dict with thread metadata
+        existing_ai_data: Previously cached AI analysis data
     
-    # If we have existing AI analysis and no new human activity, reuse it
-    if existing_ai_data and existing_ai_data.get('ai_analysis_json'):
+    Returns:
+        Dict containing AI analysis results and stakeholder information
+    """
+    if existing_ai_data:
         try:
-            cached_analysis = json.loads(existing_ai_data['ai_analysis_json'])
+            # Check if cached data is still fresh
+            last_analysis_time_str = existing_ai_data.get('ai_analysis_json', '{}')
             
-            # Check if thread has new replies since last AI analysis
-            last_analysis_time = existing_ai_data.get('updated_at')
-            current_latest_reply = thread_info.get('latest_reply')
-            
-            if last_analysis_time and current_latest_reply:
-                # Convert to comparable datetime objects
-                if isinstance(last_analysis_time, str):
-                    # Check if it's a timestamp string or ISO format
-                    try:
-                        # Try parsing as timestamp first
-                        last_analysis_time = datetime.fromtimestamp(float(last_analysis_time), tz=timezone.utc)
-                    except ValueError:
-                        # Fall back to ISO format
-                        last_analysis_time = datetime.fromisoformat(last_analysis_time.replace('Z', '+00:00'))
-                elif isinstance(last_analysis_time, datetime) and last_analysis_time.tzinfo is None:
-                    # Add timezone if naive datetime
-                    last_analysis_time = last_analysis_time.replace(tzinfo=timezone.utc)
+            if last_analysis_time_str and last_analysis_time_str != '{}':
+                cached_analysis = json.loads(last_analysis_time_str)
+                last_analysis_time = datetime.fromisoformat(cached_analysis.get('analysis_timestamp', '1970-01-01T00:00:00+00:00'))
+                current_latest_reply = datetime.fromisoformat(thread_info.get('latest_reply'))
                 
-                if isinstance(current_latest_reply, str):
-                    # Check if it's a timestamp string or ISO format
-                    try:
-                        # Try parsing as timestamp first
-                        current_latest_reply = datetime.fromtimestamp(float(current_latest_reply), tz=timezone.utc)
-                    except ValueError:
-                        # Fall back to ISO format
-                        current_latest_reply = datetime.fromisoformat(current_latest_reply.replace('Z', '+00:00'))
-                elif isinstance(current_latest_reply, datetime) and current_latest_reply.tzinfo is None:
-                    # Add timezone if naive datetime
+                # Ensure timezone awareness
+                if last_analysis_time.tzinfo is None:
+                    last_analysis_time = last_analysis_time.replace(tzinfo=timezone.utc)
+                if current_latest_reply.tzinfo is None:
                     current_latest_reply = current_latest_reply.replace(tzinfo=timezone.utc)
                 
                 # If no new activity since last analysis, reuse cached data
                 if current_latest_reply <= last_analysis_time:
                     print(f"📋 Reusing cached AI analysis (no new activity since {last_analysis_time})")
+                    
+                    # Always refresh stakeholders even with cached AI - people may have joined conversations
+                    print(f"🔄 Refreshing stakeholder list with latest channel activity...")
+                    fresh_stakeholders = slack_service.extract_enhanced_stakeholders(
+                        channel_id=thread_info.get('channel_id'),
+                        thread_ts=thread_info.get('thread_ts'), 
+                        conversation_text=conversation_text
+                    )
+                    fresh_human_stakeholders = slack_service.filter_human_stakeholders(fresh_stakeholders)
+                    
+                    # FIXED: Also include stakeholders from the AI analysis if they exist
+                    ai_stakeholders_from_cached = cached_analysis.get('stakeholders', [])
+                    if ai_stakeholders_from_cached:
+                        filtered_ai_stakeholders = slack_service.filter_human_stakeholders(ai_stakeholders_from_cached)
+                        # Combine and deduplicate
+                        all_stakeholders = list(set(fresh_human_stakeholders + filtered_ai_stakeholders))
+                        print(f"🎯 Combined stakeholders from conversation + cached AI: {all_stakeholders}")
+                    else:
+                        all_stakeholders = fresh_human_stakeholders
+                    
                     return {
                         'ai_thread_name': existing_ai_data.get('ai_thread_name'),
                         'ai_description': existing_ai_data.get('ai_description'), 
-                        'ai_stakeholders': json.loads(existing_ai_data.get('ai_stakeholders', '[]')),
+                        'ai_stakeholders': all_stakeholders,  # Use combined stakeholders
                         'ai_priority': existing_ai_data.get('ai_priority'),
                         'ai_confidence': existing_ai_data.get('ai_confidence'),
                         'github_issue': existing_ai_data.get('github_issue'),
@@ -263,11 +263,52 @@ def process_ai_analysis(slack_service, conversation_text: str, thread_info: dict
         print(f"Raw response: {ai_response_json}")
         return {}
     
-    # Extract stakeholders from conversation
-    ai_stakeholders = slack_service.extract_user_ids_from_conversation(conversation_text)
+    # Extract stakeholders from conversation, thread participants, AND recent channel activity
+    conversation_stakeholders = slack_service.extract_enhanced_stakeholders(
+        channel_id=thread_info.get('channel_id'),
+        thread_ts=thread_info.get('thread_ts'), 
+        conversation_text=conversation_text
+    )
     
     # Filter out bots - only keep human stakeholders
-    human_stakeholders = slack_service.filter_human_stakeholders(ai_stakeholders)
+    human_conversation_stakeholders = slack_service.filter_human_stakeholders(conversation_stakeholders)
+    
+    # FIXED: Also get stakeholders from AI analysis if available
+    ai_stakeholders = ai_response.get('stakeholders', [])
+    human_ai_stakeholders = slack_service.filter_human_stakeholders(ai_stakeholders) if ai_stakeholders else []
+    
+    # ENHANCED: If no stakeholders found, ensure we get the thread participants as minimum
+    if not human_conversation_stakeholders and not human_ai_stakeholders:
+        print("⚠️ No stakeholders found via extraction - using fallback methods...")
+        
+        # Fallback 1: Get thread author from thread info
+        thread_author = thread_info.get('user_id')
+        if thread_author:
+            human_conversation_stakeholders = [thread_author]
+            print(f"📝 Fallback: Added thread author as stakeholder: {thread_author}")
+        
+        # Fallback 2: Extract any user IDs from the AI response text itself
+        import re
+        ai_response_text = str(ai_response)
+        fallback_user_ids = re.findall(r'U[A-Z0-9]{8,}', ai_response_text)
+        if fallback_user_ids:
+            unique_fallback_ids = list(dict.fromkeys(fallback_user_ids))
+            human_ai_stakeholders.extend(unique_fallback_ids)
+            print(f"📝 Fallback: Found user IDs in AI response: {unique_fallback_ids}")
+    
+    # Combine stakeholders from both sources and deduplicate
+    all_stakeholders = list(set(human_conversation_stakeholders + human_ai_stakeholders))
+    
+    print(f"💬 Conversation-extracted stakeholders: {human_conversation_stakeholders}")
+    print(f"🤖 AI-identified stakeholders: {human_ai_stakeholders}")
+    print(f"🎯 Final combined stakeholders: {all_stakeholders}")
+    
+    # CRITICAL: Ensure we always have at least the thread author as stakeholder
+    if not all_stakeholders:
+        thread_author = thread_info.get('user_id')
+        if thread_author:
+            all_stakeholders = [thread_author]
+            print(f"🚨 FALLBACK: No stakeholders found, using thread author: {thread_author}")
     
     # Extract various issue references
     issue_refs = slack_service.extract_all_issue_references(conversation_text)
@@ -278,7 +319,7 @@ def process_ai_analysis(slack_service, conversation_text: str, thread_info: dict
     return {
         'ai_thread_name': ai_thread_name,
         'ai_description': ai_response.get('reasoning', 'No description available'),
-        'ai_stakeholders': human_stakeholders,
+        'ai_stakeholders': all_stakeholders,  # Use combined stakeholders
         'ai_priority': ai_response.get('priority'),
         'ai_confidence': ai_response.get('confidence_score'),
         'github_issue': issue_refs.get('github_issues', [None])[0] if issue_refs.get('github_issues') else None,
@@ -347,12 +388,26 @@ def main():
             if stored_thread_info['reply_count'] < current_thread_info['reply_count']:
                 # Will not proceed to validate, since new reply has been added in 24 hours.
                 print(f"New reply found in thread {stored_thread_info['thread_ts']} in channel {stored_thread_info['channel_id']}.")
+                
+                # Convert latest_reply to proper datetime if it's a string timestamp
+                latest_reply_dt = current_thread_info["latest_reply"]
+                if isinstance(latest_reply_dt, str):
+                    try:
+                        # Try parsing as timestamp first
+                        latest_reply_dt = datetime.fromtimestamp(float(latest_reply_dt), tz=timezone.utc)
+                    except ValueError:
+                        # Fall back to ISO format
+                        latest_reply_dt = datetime.fromisoformat(latest_reply_dt.replace('Z', '+00:00'))
+                elif isinstance(latest_reply_dt, datetime) and latest_reply_dt.tzinfo is None:
+                    # Add timezone if naive datetime
+                    latest_reply_dt = latest_reply_dt.replace(tzinfo=timezone.utc)
+                
                 db.update_thread_reply_count(
                     table=table_name,
                     thread_id=stored_thread_info['thread_ts'],
                     channel_id=stored_thread_info["channel_id"],
                     reply_count=current_thread_info["reply_count"],
-                    last_reply=current_thread_info["latest_reply"]
+                    last_reply=latest_reply_dt
                 )
             elif last_reply < (datetime.now(timezone.utc) - get_timedelta_for_config(ACTIVE_RESPONSE_LIMIT, ACTIVE_TIME_UNIT)):
                 print(f"Thread {stored_thread_info['thread_ts']} is inactive (>{ACTIVE_RESPONSE_LIMIT} {ACTIVE_TIME_UNIT}), processing AI analysis...")
@@ -468,6 +523,36 @@ def main():
                         if mention not in stakeholder_mentions:
                             stakeholder_mentions.append(mention)
                     
+                    # ENHANCED: If no stakeholder mentions, force extraction from current thread
+                    if not stakeholder_mentions:
+                        print("⚠️ No stakeholder mentions found - forcing fresh extraction...")
+                        fresh_stakeholders = slack_service.extract_enhanced_stakeholders(
+                            channel_id=stored_thread_info['channel_id'],
+                            thread_ts=stored_thread_info['thread_ts'],
+                            conversation_text=conversation_text or ""
+                        )
+                        fresh_human_stakeholders = slack_service.filter_human_stakeholders(fresh_stakeholders)
+                        
+                        # Add thread author as fallback
+                        if not fresh_human_stakeholders:
+                            fresh_human_stakeholders = [stored_thread_info['user_id']]
+                            print(f"🚨 Using thread author as stakeholder: {stored_thread_info['user_id']}")
+                        
+                        stakeholder_mentions = [f"<@{user_id}>" for user_id in fresh_human_stakeholders]
+                        
+                        # Update the stored data for future use
+                        try:
+                            import json
+                            stakeholders_json = json.dumps(fresh_human_stakeholders)
+                            update_query = sql.SQL("UPDATE {} SET ai_stakeholders = %s WHERE thread_ts = %s AND channel_id = %s").format(sql.Identifier(table_name))
+                            db.cursor.execute(update_query, (stakeholders_json, stored_thread_info['thread_ts'], stored_thread_info['channel_id']))
+                            db.connection.commit()
+                            print(f"💾 Updated database with fresh stakeholders: {fresh_human_stakeholders}")
+                        except Exception as e:
+                            print(f"⚠️ Failed to update stakeholders in database: {e}")
+                    
+                    print(f"👥 Final stakeholder mentions for Slack: {stakeholder_mentions}")
+                    
                     # Format open questions if available
                     open_questions_text = "None"
                     if ai_response.get('open_questions_left'):
@@ -496,7 +581,7 @@ def main():
                             urgency_indicator = " ⚠️ ESCALATED"
                         elif original_priority == "medium":
                             display_priority = "high" 
-                            urgency_indicator = " 🚨 CRITICAL"
+                            urgency_indicator = " :alert: CRITICAL"
                         elif original_priority == "high":
                             urgency_indicator = " 💥 URGENT - REPEATED"
                         else:  # none
@@ -505,7 +590,7 @@ def main():
                     
                     priority_color = priority_emoji.get(display_priority, "⚪")
                     
-                    # Customize message header based on reminder type
+                    # Dynamic block quote styling based on urgency
                     if is_repeat_reminder:
                         # Calculate time since last reminder
                         # Ensure both datetimes are timezone-aware
@@ -524,22 +609,44 @@ def main():
                         
                         header = f"🔄 *Follow-up Thread Reminder*{urgency_indicator}\n\n"
                         inactive_text = f"This thread is **still inactive** after our previous reminder ({time_ago}). *This may be critical* - please review urgently.\n\n"
-                    else:
-                        header = f"🚨 *Thread Reminder Alert*\n\n"
+                        
+                        # Urgent styling for repeat reminders
+                        summary_block = f"```🚨 URGENT SUMMARY```"
+                        details_block = f"```⚠️ CRITICAL DETAILS```"
+                    elif display_priority == "high":
+                        header = f":alert: *Thread Reminder Alert*\n\n"
                         inactive_text = f"This thread has been inactive for *{ACTIVE_RESPONSE_LIMIT} {ACTIVE_TIME_UNIT}*. Please review and take action.\n\n"
+                        
+                        # High priority styling
+                        summary_block = f"```🔴 HIGH PRIORITY SUMMARY```"
+                        details_block = f"```🎯 ACTION REQUIRED```"
+                    elif display_priority == "medium":
+                        header = f":alert: *Thread Reminder Alert*\n\n"
+                        inactive_text = f"This thread has been inactive for *{ACTIVE_RESPONSE_LIMIT} {ACTIVE_TIME_UNIT}*. Please review and take action.\n\n"
+                        
+                        # Medium priority styling
+                        summary_block = f"```🟡 SUMMARY```"
+                        details_block = f"```📋 DETAILS```"
+                    else:
+                        header = f"💬 *Thread Reminder*\n\n"
+                        inactive_text = f"This thread has been inactive for *{ACTIVE_RESPONSE_LIMIT} {ACTIVE_TIME_UNIT}*. Please review when convenient.\n\n"
+                        
+                        # Low/normal priority styling
+                        summary_block = f"```💬 SUMMARY```"
+                        details_block = f"```📝 DETAILS```"
                     
                     # Format enhanced message with dynamic urgency
                     final_message = header + inactive_text
                     
-                    # Summary section with blue color
-                    final_message += f"```📋 SUMMARY```\n"
+                    # Summary section with dynamic color
+                    final_message += f"{summary_block}\n"
                     final_message += f">{ai_response['reasoning']}\n\n"
                     
                     # Priority and action items in colored blocks
-                    final_message += f"```🎯 DETAILS```\n"
-                    final_message += f">🔸 *Priority:* {priority_color} {display_priority.upper()}{urgency_indicator}\n"
-                    final_message += f">🔸 *Action Items:* {open_questions_text}\n"
-                    final_message += f">🔸 *Team:* {' '.join(stakeholder_mentions) if stakeholder_mentions else 'None assigned'}\n"
+                    final_message += f"{details_block}\n"
+                    final_message += f">▫️ *Priority:* {priority_color} {display_priority.upper()}{urgency_indicator}\n"
+                    final_message += f">▫️ *Action Items:* {open_questions_text}\n"
+                    final_message += f">▫️ *Team:* {' '.join(stakeholder_mentions) if stakeholder_mentions else 'None assigned'}\n"
                     
                     # Add issue references if available  
                     issue_refs = []
@@ -551,7 +658,7 @@ def main():
                         issue_refs.append(f"Thread: {ai_data['thread_issue']}")
                     
                     if issue_refs:
-                        final_message += f">🔸 *Related Issues:* {' | '.join(issue_refs)}\n"
+                        final_message += f">▫️ *Related Issues:* {' | '.join(issue_refs)}\n"
                     
                     # Stronger call-to-action for repeat reminders
                     if is_repeat_reminder:
@@ -618,7 +725,7 @@ def main():
                 **thread_info,
                 'ai_thread_name': None,
                 'ai_description': None,
-                'ai_stakeholders': json.dumps([]),
+                                        'ai_stakeholders': '[]',
                 'ai_priority': None,
                 'ai_confidence': None,
                 'github_issue': None,

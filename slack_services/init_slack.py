@@ -377,6 +377,7 @@ class SlackService:
     def extract_user_ids_from_conversation(self, conversation_text: str) -> List[str]:
         """
         Extract user IDs from conversation text using regex.
+        Enhanced to handle multiple mention formats.
         
         Args:
             conversation_text: Raw conversation text
@@ -385,10 +386,26 @@ class SlackService:
             List of unique user IDs found in the conversation
         """
         import re
-        # Match Slack user ID format: U followed by 8+ alphanumeric characters
-        user_ids = re.findall(r'U[A-Z0-9]{8,}', conversation_text)
+        user_ids = []
+        
+        # Pattern 1: Standard Slack user ID format: U followed by 8+ alphanumeric characters
+        standard_ids = re.findall(r'U[A-Z0-9]{8,}', conversation_text)
+        user_ids.extend(standard_ids)
+        
+        # Pattern 2: Slack mention format: <@U123456789>
+        mention_ids = re.findall(r'<@(U[A-Z0-9]{8,})>', conversation_text)
+        user_ids.extend(mention_ids)
+        
+        # Pattern 3: Slack mention with display name: <@U123456789|username>
+        mention_with_name_ids = re.findall(r'<@(U[A-Z0-9]{8,})\|[^>]+>', conversation_text)
+        user_ids.extend(mention_with_name_ids)
+        
+        print(f"🔍 Regex extraction found user IDs: {user_ids}")
+        
         # Remove duplicates while preserving order
-        return list(dict.fromkeys(user_ids))
+        unique_ids = list(dict.fromkeys(user_ids))
+        print(f"📝 Unique user IDs: {unique_ids}")
+        return unique_ids
 
     def extract_github_issues_from_conversation(self, conversation_text: str) -> List[str]:
         """
@@ -813,3 +830,137 @@ class SlackService:
                 print(f"🤖 Filtered out bot user: {user_id}")
         
         return human_users
+
+    def extract_thread_participants(self, channel_id: str, thread_ts: str) -> List[str]:
+        """
+        Extract all participants (message authors) from a thread.
+        
+        Args:
+            channel_id: Slack channel ID
+            thread_ts: Thread timestamp
+            
+        Returns:
+            List of user IDs who participated in the thread
+        """
+        participants = set()
+        
+        try:
+            response = self.client.conversations_replies(
+                channel=channel_id,
+                ts=thread_ts,
+                limit=1000  # Get all messages in thread
+            )
+            
+            if response['ok']:
+                messages = response.get('messages', [])
+                
+                for message in messages:
+                    # Add message author
+                    if 'user' in message:
+                        participants.add(message['user'])
+                    
+                    # Also check for user mentions in the message text
+                    text = message.get('text', '')
+                    mentioned_users = self.extract_user_ids_from_conversation(text)
+                    participants.update(mentioned_users)
+                        
+                print(f"👥 Found {len(participants)} unique thread participants")
+                return list(participants)
+            else:
+                print(f"Failed to fetch thread participants: {response.get('error', 'Unknown error')}")
+                return []
+                
+        except SlackApiError as e:
+            print(f"Error fetching thread participants: {e.response['error']}")
+            return []
+
+    def get_recent_channel_participants(self, channel_id: str, hours: int = 24) -> List[str]:
+        """
+        Get users who have been active in the channel recently.
+        
+        Args:
+            channel_id: Slack channel ID
+            hours: Look back this many hours for recent activity
+            
+        Returns:
+            List of user IDs who were recently active in the channel
+        """
+        participants = set()
+        
+        try:
+            # Calculate oldest timestamp (hours ago)
+            from datetime import datetime, timedelta, timezone
+            oldest_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+            oldest_ts = oldest_time.timestamp()
+            
+            response = self.client.conversations_history(
+                channel=channel_id,
+                oldest=str(oldest_ts),
+                limit=100  # Get recent messages
+            )
+            
+            if response['ok']:
+                messages = response.get('messages', [])
+                
+                for message in messages:
+                    if 'user' in message:
+                        participants.add(message['user'])
+                        
+                print(f"🕒 Found {len(participants)} recent channel participants in last {hours}h")
+                return list(participants)
+            else:
+                print(f"Failed to fetch recent channel participants: {response.get('error', 'Unknown error')}")
+                return []
+                
+        except Exception as e:
+            print(f"Error fetching recent channel participants: {e}")
+            return []
+
+    def extract_enhanced_stakeholders(self, channel_id: str, thread_ts: str, conversation_text: str) -> List[str]:
+        """
+        Extract enhanced stakeholder list including thread participants, mentioned users, and recent channel participants.
+        
+        Args:
+            channel_id: Slack channel ID  
+            thread_ts: Thread timestamp
+            conversation_text: Thread conversation text
+            
+        Returns:
+            List of user IDs for all stakeholders (comprehensive detection)
+        """
+        # Get thread participants (message authors)
+        thread_participants = self.extract_thread_participants(channel_id, thread_ts)
+        
+        # Get mentioned users from conversation text
+        mentioned_users = self.extract_user_ids_from_conversation(conversation_text)
+        
+        # Get recent channel participants (for broader context)
+        recent_participants = self.get_recent_channel_participants(channel_id, hours=24)
+        
+        # Combine and deduplicate
+        all_stakeholders = list(set(thread_participants + mentioned_users + recent_participants))
+        
+        print(f"👥 Thread participants: {thread_participants}")
+        print(f"💬 Mentioned users: {mentioned_users}")
+        print(f"🕒 Recent channel participants: {recent_participants}")
+        print(f"🎯 Total stakeholders: {all_stakeholders}")
+        
+        # ENHANCED: If no stakeholders found, ensure we at least include thread author and active participants
+        if not all_stakeholders:
+            print("⚠️ No stakeholders found via standard methods, falling back to thread author")
+            try:
+                # Get the thread starter as a fallback stakeholder
+                response = self.client.conversations_replies(
+                    channel=channel_id,
+                    ts=thread_ts,
+                    limit=1
+                )
+                if response['ok'] and response.get('messages'):
+                    thread_author = response['messages'][0].get('user')
+                    if thread_author:
+                        all_stakeholders = [thread_author]
+                        print(f"📝 Fallback: Using thread author as stakeholder: {thread_author}")
+            except Exception as e:
+                print(f"Error getting thread author: {e}")
+        
+        return all_stakeholders

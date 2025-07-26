@@ -157,11 +157,26 @@ func Start(bindAddr string, port string) {
       Level: 2,
       MinLength: 4096,
     }))
+    
+    // CORS middleware for frontend-backend communication
+    e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+        AllowOrigins:     []string{"http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"},
+        AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"},
+        AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With", "X-HTTP-Method-Override"},
+        AllowCredentials: false,
+        ExposeHeaders:    []string{"Content-Length", "Content-Type"},
+        MaxAge:           86400, // 24 hours
+    }))
 
     // API endpoints
-
     e.GET("/api/sample_get", c.GetSample)
     e.POST("/api/sample_post", c.PostSample)
+    
+    // Thread Dashboard API endpoints
+    e.GET("/api/stats", c.GetDashboardStats)
+    e.GET("/api/threads", c.GetThreads)
+    e.GET("/api/channels", c.GetChannels)
+    e.GET("/api/user-profiles", c.GetUserProfiles)
 
     render_htmls := templates.NewTemplate()
 
